@@ -859,6 +859,40 @@ def build_nodes_text(data: dict[str, Any], edge_hosts: list[str], cfg: Config) -
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+FAST_LATENCY_MAX_MS = 4000
+FAST_MAX_NODES = 12
+
+
+def build_fast_nodes_text(data: dict[str, Any], edge_hosts: list[str], cfg: Config) -> str:
+    if not edge_hosts:
+        return ""
+    pool: list[tuple[float, str, dict[str, Any]]] = []
+    for code, group in data["countries"].items():
+        name = COUNTRY_ZH.get(code) or group.get("name") or code
+        for node in group["nodes"]:
+            if node.get("residential") != "residential":
+                continue
+            lat = node.get("latency_ms")
+            if lat is None or lat > FAST_LATENCY_MAX_MS:
+                continue
+            pool.append((float(lat), name, node))
+    pool.sort(key=lambda item: item[0])
+    lines: list[str] = []
+    seen_links: set[str] = set()
+    counters: dict[str, int] = {}
+    index = 0
+    for _lat, name, node in pool[:FAST_MAX_NODES]:
+        link = f"sstp://vpn:vpn@{node['host']}:{node['port']}"
+        if link in seen_links:
+            continue
+        seen_links.add(link)
+        counters[name] = counters.get(name, 0) + 1
+        entry = edge_hosts[index % len(edge_hosts)]
+        index += 1
+        lines.append(f"{entry}#{sanitize_remark(f'{name}-住宅-{counters[name]:02d}')}${link}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def atomic_write_text(path: str, text: str) -> None:
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
@@ -892,6 +926,8 @@ def write_outputs(
     atomic_write_text(html_path, html)
     nodes_text = build_nodes_text(data, edge_hosts, cfg)
     atomic_write_text(nodes_path, nodes_text)
+    fast_path = os.path.join(cfg.public_dir, "nodes-fast.txt")
+    atomic_write_text(fast_path, build_fast_nodes_text(data, edge_hosts, cfg))
     return data_path, html_path, nodes_path, nodes_text
 
 
